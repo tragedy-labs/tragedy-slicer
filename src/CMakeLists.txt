@@ -38,6 +38,8 @@ if (SLIC3R_GUI)
     add_subdirectory(slic3r-platform)
     add_subdirectory(libvgcode)
     add_subdirectory(slic3r-shared)
+    add_subdirectory(tragedy-slicer-core)    # tragedy-labs: the engine as plain functions (ADR 0032)
+    add_subdirectory(tragedy-slicer-service) # tragedy-labs: its native host, HTTP + WebSocket on 127.0.0.1
     if (NOT EMSCRIPTEN)
         add_subdirectory(slic3r-platform-wx)
         add_subdirectory(slic3r-app-desktop)
