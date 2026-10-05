@@ -1,3 +1,11 @@
+<img src="/resources/icons/tragedy-slicer.svg" alt="tragedy-slicer" width="96">
+
+# tragedy-slicer
+
+The [tragedy-labs](https://github.com/tragedy-labs/tragedy-labs) fork of PrusaSlicer: the engine behind a web plater, with our targets beside Prusa's (`src/tragedy-slicer-*`, branch `tragedy`). Upstream's README follows.
+
+---
+
 ![PrusaSlicer logo](/resources/icons/PrusaSlicer_128px.png)
 
 # PrusaSlicer
