@@ -11,6 +11,7 @@ endif()
 
 add_subdirectory(slic3r-base)
 add_subdirectory(slic3r-domain)
+add_subdirectory(tragedy-slicer-dump) # tragedy-labs: the settings vocabulary as JSON (ADR 0032)
 add_subdirectory(slic3r-biz-algorithms)
 add_subdirectory(slic3r-biz-cgal-algorithms)
 add_subdirectory(slic3r-biz-crypto)
