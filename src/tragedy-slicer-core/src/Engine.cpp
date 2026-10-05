@@ -163,6 +163,12 @@ struct Engine::Impl
     App::InitParams init_params;
     std::unique_ptr<CLIRuntime> runtime;
     Domain::SelectionId scratch_project{};
+    // One project slices, for the service's whole run: its objects are replaced
+    // before each slice. A project per slice, removed after, was tried first; a
+    // project's id is its position in the workbench, so the next project took
+    // the removed one's and the scene's callbacks for the new slice found the
+    // old project's state (a crash in on_extruder_candidates_changed).
+    Domain::SelectionId slicing_project{};
 
     PresetInteractor& presets() { return runtime->project_interactor().preset_interactor(); }
 
@@ -189,7 +195,7 @@ struct Engine::Impl
                 if (ref.get().id == printer_preset) found = true;
             }
             if (!found) return Failure{400, "unknown printer preset " + printer_preset + " for printer " + hw_id};
-            pi.select_printer_preset(hw_id, printer_preset, true);
+            pi.select_printer_preset(hw_id, printer_preset);
         }
 
         if (wanted.print) {
@@ -197,7 +203,7 @@ struct Engine::Impl
             for (const auto& [ref, is_runtime] : pi.get_print_presets(hw_id, printer_preset))
                 if (ref.get().id == *wanted.print) found = true;
             if (!found) return Failure{400, "unknown print preset " + *wanted.print + " for this printer"};
-            pi.select_print_preset(*wanted.print, true);
+            pi.select_print_preset(*wanted.print);
         }
         const std::string print_id = pi.selected_printer_preset().print.id;
 
@@ -207,7 +213,7 @@ struct Engine::Impl
                 for (const auto& [ref, is_runtime] : pi.get_tool_print_presets(hw_id, printer_preset, print_id, i))
                     if (ref.get().id == (*wanted.tools)[i]) found = true;
                 if (!found) return Failure{400, "unknown tool print preset " + (*wanted.tools)[i] + " for tool " + std::to_string(i)};
-                pi.select_tool_print_preset(i, (*wanted.tools)[i], true);
+                pi.select_tool_print_preset(i, (*wanted.tools)[i]);
             }
         }
         if (wanted.materials) {
@@ -216,7 +222,7 @@ struct Engine::Impl
                 for (const auto& [ref, is_runtime] : pi.get_material_presets(hw_id, printer_preset, print_id, i))
                     if (ref.get().id == (*wanted.materials)[i]) found = true;
                 if (!found) return Failure{400, "unknown material preset " + (*wanted.materials)[i] + " for slot " + std::to_string(i)};
-                pi.select_material_preset(i, (*wanted.materials)[i], true);
+                pi.select_material_preset(i, (*wanted.materials)[i]);
             }
         }
         return std::nullopt;
@@ -256,9 +262,11 @@ Engine::Engine(const EngineOptions& options) : m_impl(std::make_unique<Impl>())
     App::init_paths(m_impl->init_params);
 
     m_impl->runtime = std::make_unique<CLIRuntime>(m_impl->init_params);
-    // One project to hold the selection for listing and config; a slice gets its own.
-    m_impl->scratch_project = m_impl->runtime->project_interactor().new_project();
-    m_impl->runtime->project_interactor().select_project(m_impl->scratch_project);
+    // One project holds the selection for listing and config; another slices.
+    ProjectInteractor& pi    = m_impl->runtime->project_interactor();
+    m_impl->scratch_project  = pi.new_project();
+    m_impl->slicing_project  = pi.new_project();
+    pi.select_project(m_impl->scratch_project);
 }
 
 Engine::~Engine() = default;
@@ -337,7 +345,11 @@ Outcome<messages::Model> Engine::inspect(const std::string& path, const std::str
     out.bytes = static_cast<std::int64_t>(std::filesystem::file_size(path));
     for (const Domain::ModelObject* object : loaded->objects) {
         messages::ModelObject o;
-        o.name = object->name.empty() ? name : object->name;
+        // The loader names an STL's one object after the file on disk, which for
+        // an upload is the stored copy's name; the file's own name is the one the
+        // person knows.
+        const std::string stored = std::filesystem::path(path).filename().string();
+        o.name = (object->name.empty() || object->name == stored || object->name == std::filesystem::path(stored).stem().string()) ? name : object->name;
         for (const Domain::ModelVolume* volume : object->volumes)
             o.triangles += static_cast<std::int64_t>(volume->mesh().facets_count());
         const Domain::BoundingBox3d& box = Biz::Algorithms::ModelObject::bounding_box_exact(*object);
@@ -362,19 +374,18 @@ Outcome<SliceOutcome> Engine::slice(
     auto loaded = Biz::FileLoadingLogic::read_model_from_file(model_path, nullptr);
     if (!loaded) return Out::fail(422, "the engine could not read the model: " + loaded.error());
 
-    const Domain::SelectionId project_id = pi.new_project();
-    pi.select_project(project_id);
-    struct Cleanup
+    pi.select_project(m_impl->slicing_project);
+    struct Reselect
     {
         ProjectInteractor& pi;
-        Domain::SelectionId id;
         Domain::SelectionId scratch;
-        ~Cleanup()
-        {
-            pi.remove_project(id);
-            pi.select_project(scratch);
-        }
-    } cleanup{pi, project_id, m_impl->scratch_project};
+        ~Reselect() { pi.select_project(scratch); }
+    } reselect{pi, m_impl->scratch_project};
+    // The last slice's objects go; the project stays.
+    {
+        const Domain::ModelObjectPtrs previous = pi.selected_project().model().objects;
+        for (Domain::ModelObject* object : previous) pi.scene_interactor().delete_object(object);
+    }
 
     // The selection first: the printer decides the bed the model is centred on.
     if (auto failure = m_impl->apply(request.selection.value_or(messages::PresetSelection{})))

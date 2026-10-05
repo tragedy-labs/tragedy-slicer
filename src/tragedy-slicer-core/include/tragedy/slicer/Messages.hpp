@@ -189,7 +189,7 @@ inline void from_json(const nlohmann::json& j, PrinterTool& v)
 /// `https://schema.tragedylabs.net/v1/slicer/printer.json`. A printer the engine knows how to slice for: the engine's hardware configuration (a printer model with its tool heads and the nozzles in them), listed so a person can pick one. The engine evaluates printer, print and material presets against this configuration — which presets exist for a 0.25 mm nozzle differs from a 0.4 mm one — so it is the first thing a selection names, and the choices for everything else follow from it.
 struct Printer
 {
-    /// The engine's hardware configuration id. Opaque.
+    /// The engine's hardware configuration id. Opaque, and good for one run of the service only: the engine makes these up when it loads the bundle (the presets' ids, by contrast, are written in the vendor's YAML and survive a restart). A client that reconnects lists again and chooses afresh; one that sends a remembered id is told it is unknown. Printers as equipment (ADR 0012) will give a printer a lasting id.
     std::string id{};
     /// As the engine shows it — `Original Prusa MK4S`.
     std::string name{};

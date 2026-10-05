@@ -179,11 +179,16 @@ std::string filename_only(std::string name)
 
 // --- WebSocket ------------------------------------------------------------------
 
+// The open sockets, owned jointly by the server and every session: the
+// io_context releases its pending operations — and the sessions they hold —
+// after the server is gone, and a session's last act is to leave this set.
+using WsRegistry = std::shared_ptr<std::set<WsSession*>>;
+
 class WsSession : public std::enable_shared_from_this<WsSession>
 {
 public:
-    WsSession(tcp::socket&& socket, std::set<WsSession*>& registry) :
-        m_ws(std::move(socket)), m_registry(registry)
+    WsSession(tcp::socket&& socket, WsRegistry registry) :
+        m_ws(std::move(socket)), m_registry(std::move(registry))
     {}
 
     void run(Request&& req)
@@ -194,7 +199,7 @@ public:
         }));
         m_ws.async_accept(req, [self = shared_from_this()](beast::error_code ec) {
             if (ec) return;
-            self->m_registry.insert(self.get());
+            self->m_registry->insert(self.get());
             self->read();
         });
     }
@@ -205,14 +210,14 @@ public:
         if (m_queue.size() == 1) write();
     }
 
-    ~WsSession() { m_registry.erase(this); }
+    ~WsSession() { m_registry->erase(this); }
 
 private:
     void read()
     {
         m_ws.async_read(m_buffer, [self = shared_from_this()](beast::error_code ec, std::size_t) {
             if (ec) {
-                self->m_registry.erase(self.get());
+                self->m_registry->erase(self.get());
                 return;
             }
             // Nothing is read from the client yet: the stroke protocol of step 4 is
@@ -227,7 +232,7 @@ private:
         m_ws.text(true);
         m_ws.async_write(net::buffer(m_queue.front()), [self = shared_from_this()](beast::error_code ec, std::size_t) {
             if (ec) {
-                self->m_registry.erase(self.get());
+                self->m_registry->erase(self.get());
                 return;
             }
             self->m_queue.pop_front();
@@ -238,7 +243,7 @@ private:
     websocket::stream<beast::tcp_stream> m_ws;
     beast::flat_buffer m_buffer;
     std::deque<std::string> m_queue;
-    std::set<WsSession*>& m_registry;
+    WsRegistry m_registry;
 };
 
 // --- HTTP -----------------------------------------------------------------------
@@ -250,7 +255,7 @@ struct Server::Impl
     Jobs& jobs;
     ServerOptions options;
     tcp::acceptor acceptor;
-    std::set<WsSession*> sockets;
+    WsRegistry sockets{std::make_shared<std::set<WsSession*>>()};
 
     Impl(net::io_context& ioc, EngineThread& engine, Jobs& jobs, ServerOptions options) :
         ioc(ioc), engine(engine), jobs(jobs), options(std::move(options)), acceptor(ioc)
@@ -540,7 +545,7 @@ void Server::run()
 void Server::broadcast(const std::string& text)
 {
     net::post(m_impl->ioc, [this, text] {
-        for (WsSession* session : std::set<WsSession*>(m_impl->sockets)) session->send(text);
+        for (WsSession* session : std::set<WsSession*>(*m_impl->sockets)) session->send(text);
     });
 }
 
