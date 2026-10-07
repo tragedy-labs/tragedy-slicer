@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <typeinfo>
 #include <variant>
@@ -33,7 +34,33 @@
 using json = nlohmann::ordered_json;
 using namespace Slic3r::Domain;
 
+// magic_enum names only the values it scans, -128..127 by default, and returns ""
+// for the rest. The engine numbers categories in hundreds (Filament_* from 200,
+// Printer_* from 300) and option groups in the thousands (Printer_* from 10000), so
+// at the default range every filament and printer id came out empty and their boxes
+// lost their pages. The ranges cover what the engine defines; enum_id() below
+// refuses a value they miss, so a new band fails the dump instead of emptying it.
+template <> struct magic_enum::customize::enum_range<ConfigItemDef::Category> {
+    static constexpr int min = 0;
+    static constexpr int max = 1023;
+};
+template <> struct magic_enum::customize::enum_range<ConfigItemDef::OptionGroup> {
+    static constexpr int min = 0;
+    static constexpr int max = 16383;
+};
+
 namespace {
+
+template <typename E>
+std::string enum_id(E value)
+{
+    const auto name = magic_enum::enum_name(value);
+    if (name.empty())
+        throw std::runtime_error("tragedy-slicer-dump: " + std::string(magic_enum::enum_type_name<E>()) +
+                                 " value " + std::to_string(static_cast<long>(value)) +
+                                 " is outside magic_enum's range; widen its enum_range");
+    return std::string(name);
+}
 
 // --- values, as the engine's ConfigJson writes them ---------------------------
 
@@ -150,14 +177,19 @@ json item_json(const ConfigItemDef& def, PrinterTechnology pt)
     j["units"] = def.units;
 
     // Category and option group name the page and the group on it — what the
-    // 2.x Tab.cpp used to hold, now data on the definition.
+    // 2.x Tab.cpp used to hold, now data on the definition. `order` is the enum's
+    // value: the engine numbers pages and groups in the order its tabs show them
+    // (Print_LayersSurfaces 100 before Print_WallsPerimeters 101), so it is the
+    // order and nothing else; the id stays the key.
     j["category"] = {
-        {"id", std::string(magic_enum::enum_name(def.category))},
+        {"id", enum_id(def.category)},
+        {"order", static_cast<int>(def.category)},
         {"title", def.category == ConfigItemDef::Category::Unknown
                       ? json(nullptr)
                       : json(ConfigItemDef::translate_category(def.category, pt))}};
     j["option_group"] = {
-        {"id", std::string(magic_enum::enum_name(def.option_group))},
+        {"id", enum_id(def.option_group)},
+        {"order", static_cast<int>(def.option_group)},
         {"title", def.option_group == ConfigItemDef::OptionGroup::Unknown
                       ? json(nullptr)
                       : json(ConfigItemDef::translate_option_group(def.option_group))}};
